@@ -108,6 +108,29 @@ await fetch('http://127.0.0.1:8787/profiles/client-b/release', {
 
 Any CDP client works — Playwright, Puppeteer, or raw DevTools Protocol in any language. That is the whole integration surface.
 
+## Any language, any framework
+
+sessionfarm has no model, vendor or framework coupling. Its only runtime dependency is a browser driver, and nothing in it imports an SDK or calls a model. Leases are plain HTTP; the browser is Chrome DevTools Protocol. Both are universal.
+
+[`examples/agent.py`](examples/agent.py) drives a profile using nothing but the Python standard library — no playwright, no requests, no Node:
+
+```bash
+python examples/agent.py
+```
+
+```
+lease: 43195643-4510-440b-919e-80a85e248ae0
+browser: HeadlessChrome/151.0.7922.34
+pages: ['https://example.com/', 'about:blank']
+released
+```
+
+The `cdpUrl` is a websocket, but Chrome serves plain HTTP on the same port, so a client with no websocket library at all can still open and inspect pages. With a real CDP library — Playwright, Puppeteer, chromedp, rod, Selenium in CDP mode — you get the full API against the same warm session.
+
+That covers LangChain, browser-use, OpenAI's agents SDK, a Go binary, or a bash script with `curl`. sessionfarm hands out a URL and a lease; what connects to it is not its business.
+
+The real constraint is Chromium, not the agent: CDP means Chrome-family browsers. Firefox and WebKit would need a different transport, which is not built.
+
 ## Leases
 
 A profile serves one holder at a time; Chromium locks its user-data-dir, and two agents driving one session corrupt each other's state anyway. A second `acquire` gets `409`. Leases carry a TTL so a crashed agent cannot hold a profile forever.
