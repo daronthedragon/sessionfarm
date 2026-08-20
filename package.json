@@ -8,7 +8,7 @@
   "scripts": {
     "build": "tsc",
     "dev": "tsc --watch",
-    "test": "npm run build && node test/e2e.mjs"
+    "test": "npm run build && node test/e2e.mjs && node test/login-e2e.mjs"
   },
   "engines": { "node": ">=20" },
   "dependencies": { "playwright-core": "^1.49.0" },

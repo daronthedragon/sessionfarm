@@ -1,8 +1,11 @@
 #!/usr/bin/env node
 import crypto from 'node:crypto';
 import readline from 'node:readline/promises';
-import { chromium } from 'playwright-core';
-import { createServer } from './server.js';
+import net from 'node:net';
+import { spawn } from 'node:child_process';
+import { createServer, mintTicket } from './server.js';
+import * as screencast from './screencast.js';
+import * as health from './health.js';
 import * as store from './store.js';
 import * as pool from './pool.js';
 
@@ -14,9 +17,9 @@ const USAGE = `sessionfarm — persistent logged-in browser profiles as a servic
   sessionfarm create <name> [--notes "..."] [--proxy http://host:port]
       Create an empty profile.
 
-  sessionfarm login <name>
-      Open a visible browser on the profile so you can log in by hand.
-      Close it when done; persistent cookies are kept.
+  sessionfarm login <name> [--url https://…] [--no-open]
+      Stream the profile's browser to your own browser so you can log in by
+      hand. Works identically on a laptop and on a headless VPS.
 
   sessionfarm list
   sessionfarm rm <name>
@@ -29,6 +32,28 @@ Env:
 function flag(argv: string[], name: string): string | undefined {
   const i = argv.indexOf(`--${name}`);
   return i === -1 ? undefined : argv[i + 1];
+}
+
+
+function freePort(): Promise<number> {
+  return new Promise((resolve) => {
+    const srv = net.createServer();
+    srv.listen(0, '127.0.0.1', () => {
+      const port = (srv.address() as net.AddressInfo).port;
+      srv.close(() => resolve(port));
+    });
+  });
+}
+
+function openBrowser(url: string): void {
+  const cmd = process.platform === 'win32' ? ['cmd', ['/c', 'start', '', url]]
+            : process.platform === 'darwin' ? ['open', [url]]
+            : ['xdg-open', [url]];
+  try {
+    spawn(cmd[0] as string, cmd[1] as string[], { detached: true, stdio: 'ignore' }).unref();
+  } catch {
+    console.log('(could not open a browser automatically - open the URL above)');
+  }
 }
 
 async function main(): Promise<void> {
@@ -70,23 +95,41 @@ async function main(): Promise<void> {
     case 'login': {
       const name = rest[0];
       if (!name) throw new Error('usage: sessionfarm login <name>');
-      const cfg = store.read(name);
-      if (!cfg) throw new Error(`no such profile "${name}" — run: sessionfarm create ${name}`);
-      const ctx = await chromium.launchPersistentContext(store.dataDir(name), {
-        headless: false,
-        proxy: cfg.proxy,
-        userAgent: cfg.userAgent,
-        viewport: cfg.viewport ?? { width: 1280, height: 800 },
-        locale: cfg.locale,
-        timezoneId: cfg.timezoneId,
-      });
-      await ctx.newPage().then((p) => p.goto(flag(rest, 'url') ?? 'about:blank').catch(() => undefined));
+      if (!store.read(name)) throw new Error(`no such profile "${name}" - run: sessionfarm create ${name}`);
+
+      // Same code path a VPS runs. The browser being remote is the point: there
+      // is no headed-only mode to drift out of sync with the streamed one.
+      const token = process.env.SESSIONFARM_TOKEN ?? crypto.randomBytes(24).toString('hex');
+      const port = Number(flag(rest, 'port') ?? 0) || (await freePort());
+      const server = createServer(token);
+      await new Promise<void>((r) => server.listen(port, '127.0.0.1', r));
+
+      const ticket = mintTicket(name, token);
+      const url = `http://127.0.0.1:${port}/login/${encodeURIComponent(name)}?ticket=${encodeURIComponent(ticket)}`;
+      await screencast.get(name);
+
+      console.log(`
+driving profile "${name}" at:
+
+  ${url}
+`);
+      if (flag(rest, 'url')) {
+        const cast = await screencast.get(name);
+        await cast.input({ type: 'nav', url: flag(rest, 'url')! });
+      }
+      if (!rest.includes('--no-open')) openBrowser(url);
+      console.log('log in, then press Enter here to finish...');
+
       const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-      await rl.question('log in, then press Enter here to save the profile... ');
+      await rl.question('');
       rl.close();
-      await ctx.close();
-      console.log(`saved. persistent cookies for "${name}" are on disk.`);
-      console.log('note: session-only cookies are NOT saved — sites relying on them need the browser kept warm.');
+
+      const result = await health.check(name);
+      console.log(`health: ${result.state}${result.detail ? ' - ' + result.detail : ''}`);
+      console.log(`profile stays warm while the server runs; session cookies die if it stops.`);
+      await screencast.closeAll();
+      await pool.stopAll();
+      server.close();
       break;
     }
 

@@ -38,6 +38,7 @@ Chromium comes from your existing Playwright install (`playwright-core` does not
 # 1. create a profile and log into it by hand, once
 node dist/cli.js create client-b --notes "client B, main account"
 node dist/cli.js login client-b --url https://example.com
+# ^ opens your browser, streaming the profile's Chromium. Log in, press Enter.
 
 # 2. serve
 SESSIONFARM_TOKEN=secret node dist/cli.js serve
@@ -93,6 +94,24 @@ Give a profile an `authCheck` and sessionfarm can tell you whether the login sti
 
 `GET /profiles/:name/health` runs it in a throwaway page, so it never disturbs a lease holder.
 
+## Logging in
+
+`sessionfarm login <name>` streams the profile's Chromium into your own browser: frames out over SSE, your clicks and keystrokes back over HTTP, both driven by CDP. You click, type, solve the 2FA prompt, and the cookies land in the profile.
+
+```bash
+node dist/cli.js login client-b --url https://example.com
+```
+
+It opens your default browser at a one-off URL and waits. Press Enter in the terminal when you are done and it runs the profile's health check.
+
+There is no separate headed mode. The same code path runs on your laptop and on a headless VPS — which is the point, since a server has no screen to open a window on. Local testing exercises the real thing rather than a stand-in for it.
+
+Popups are followed automatically, so OAuth flows that open a second window keep streaming instead of freezing on the page that spawned them.
+
+**Your password is not visible to sessionfarm.** Keystrokes go browser → HTTP → CDP → page. No input event is logged at any layer, deliberately.
+
+The stream and input routes are authenticated by a signed, expiring, profile-scoped ticket rather than the bearer token, because `EventSource` cannot set headers. A leaked URL expires and only ever reaches one profile.
+
 ## API
 
 | method | path | purpose |
@@ -106,18 +125,27 @@ Give a profile an `authCheck` and sessionfarm can tell you whether the login sti
 | `POST` | `/profiles/:name/acquire` | take a lease, get a `cdpUrl` |
 | `POST` | `/profiles/:name/release` | give the lease back |
 | `GET` | `/profiles/:name/health` | is this profile still logged in |
+| `POST` | `/profiles/:name/login-url` | mint a ticketed URL for the login stream |
+| `GET` | `/login/:name` | the login page (ticket) |
+| `GET` | `/login/:name/stream` | SSE frame feed (ticket) |
+| `POST` | `/login/:name/input` | mouse, key, scroll, navigate (ticket) |
+| `POST` | `/login/:name/done` | run the health check (ticket) |
 
-Every route requires `Authorization: Bearer $SESSIONFARM_TOKEN`, compared in constant time.
+`/profiles/*` routes require `Authorization: Bearer $SESSIONFARM_TOKEN`, compared in constant time. `/login/*` routes take a ticket instead.
 
 ## Running on a VPS
 
-Profiles live in `$SESSIONFARM_HOME` (default `~/.sessionfarm`). The intended flow is to log in on a machine with a screen, then copy the profile directory to the server:
+Profiles live in `$SESSIONFARM_HOME` (default `~/.sessionfarm`). Nothing about running on a server differs from running locally — same binary, same routes, and `login` streams the browser so a missing display costs you nothing.
+
+Bind the API to `127.0.0.1` and reach it over an SSH tunnel:
 
 ```bash
-rsync -a ~/.sessionfarm/profiles/client-b/ vps:~/.sessionfarm/profiles/client-b/
+ssh -L 8787:127.0.0.1:8787 vps
 ```
 
-Bind the API to `127.0.0.1` and reach it over an SSH tunnel. It has a bearer token, not an authorization model — do not put it on a public interface.
+Then open the login URL on your own machine. It has a bearer token, not an authorization model — do not put it on a public interface.
+
+The one thing local testing cannot tell you is how a datacenter IP affects a given site's bot detection. That is unrelated to the code.
 
 ## Tests
 
@@ -125,11 +153,17 @@ Bind the API to `127.0.0.1` and reach it over an SSH tunnel. It has a bearer tok
 npm test
 ```
 
-Covers auth rejection, create, lease exclusivity, external CDP attach, state surviving across leases, warm survival after client disconnect, health check, status, delete.
+Two suites, 19 assertions, real Chromium throughout.
+
+`test/e2e.mjs` covers auth rejection, create, lease exclusivity, external CDP attach, state surviving across leases, warm survival after a client disconnect, health check, status and delete.
+
+`test/login-e2e.mjs` drives the login page with a second browser: it asserts the client script parses, forged tickets are refused, SSE frames render, the URL bar navigates the remote browser, a click maps to the right coordinates and focuses the right element, typed characters arrive in the remote page, and Enter submits a real form.
 
 ## Scope
 
-Per-profile proxy, user-agent, viewport, locale and timezone are supported. Deliberately not included yet: fingerprint spoofing beyond those, automatic re-login, and a UI.
+Per-profile proxy, user-agent, viewport, locale and timezone are supported. Deliberately not included yet: fingerprint spoofing beyond those, automatic re-login, and a dashboard over multiple profiles.
+
+Hard-killing the server orphans its Chromium processes; `SIGINT` and `SIGTERM` shut them down cleanly.
 
 Note that many platforms restrict automation and multi-account use in their terms. This is infrastructure for sessions you are entitled to drive — client accounts you manage, your own brands, your own testing.
 
