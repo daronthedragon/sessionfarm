@@ -1,0 +1,17 @@
+{
+  "name": "sessionfarm",
+  "version": "0.1.0",
+  "description": "Persistent logged-in browser profiles as a service. Agents borrow a warm, authenticated session over CDP instead of re-solving login every run.",
+  "type": "module",
+  "bin": { "sessionfarm": "dist/cli.js" },
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "test": "npm run build && node test/e2e.mjs"
+  },
+  "engines": { "node": ">=20" },
+  "dependencies": { "playwright-core": "^1.49.0" },
+  "devDependencies": { "typescript": "^5.7.0", "@types/node": "^22.10.0" },
+  "license": "MIT"
+}
