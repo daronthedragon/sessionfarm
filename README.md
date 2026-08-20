@@ -10,6 +10,43 @@ agent ──HTTP──> sessionfarm ──CDP──> warm chromium (profile: cli
                      └─ profiles on disk, one user-data-dir each
 ```
 
+<p align="center">
+  <img src="assets/demo.svg" width="760" alt="Terminal session: a profile is created, one agent leases it and attaches over CDP, a second agent is refused with 409, then after the handover the second agent finds the same localStorage and cookie still in place and the health check reports authenticated.">
+</p>
+
+<details>
+<summary>Same output as text</summary>
+
+```
+$ sessionfarm create client-b --notes "client B, main account"
+created client-b at ~/.sessionfarm/profiles/client-b
+
+$ sessionfarm serve
+sessionfarm listening on http://127.0.0.1:8787
+
+# an agent takes a lease on the warm profile
+POST /profiles/client-b/acquire  ->  200
+     leaseId   a8cf3a6a-e047-4b36-b70c-da727d02bc82
+     cdpUrl    ws://127.0.0.1:51445/devtools/browser/d3255b7f…
+
+# it attaches over CDP and works in the already-open session
+connected. active page: https://example.com/
+
+# a second agent asks for the same profile
+POST /profiles/client-b/acquire  ->  409  profile "client-b" is leased until 2026-08-20T17:37:58.370Z
+
+# agent-1 hands it back; agent-2 gets the same warm session
+localStorage.who  agent-1
+cookie auth       tok-xyz   <- login state carried across the handover
+
+GET  /profiles/client-b/health   ->  authenticated
+warm for 0.3s, leased by agent-2
+```
+
+</details>
+
+Real output from `node scripts/demo.mjs`, which drives an actual server rather than describing one.
+
 ## Why "warm" means the process stays alive
 
 While building this, one measurement changed the design:
@@ -102,7 +139,11 @@ Give a profile an `authCheck` and sessionfarm can tell you whether the login sti
 node dist/cli.js login client-b --url https://example.com
 ```
 
-It opens your default browser at a one-off URL and waits. Press Enter in the terminal when you are done and it runs the profile's health check.
+<p align="center">
+  <img src="assets/login-stream.png" width="820" alt="A headless Chromium streamed into an ordinary browser tab: the sessionfarm bar shows the profile name, a back button, an address bar and a Done button, and below it GitHub's real sign-in page is rendered and ready for typing.">
+</p>
+
+That is a headless Chromium, rendered in a normal browser tab and accepting your clicks and keystrokes. It opens your default browser at a one-off URL and waits. Press Enter in the terminal when you are done and it runs the profile's health check.
 
 There is no separate headed mode. The same code path runs on your laptop and on a headless VPS — which is the point, since a server has no screen to open a window on. Local testing exercises the real thing rather than a stand-in for it.
 

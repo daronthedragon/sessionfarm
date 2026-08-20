@@ -1,0 +1,23 @@
+$ sessionfarm create client-b --notes "client B, main account"
+created client-b at ~/.sessionfarm/profiles/client-b
+
+$ sessionfarm serve
+sessionfarm listening on http://127.0.0.1:8787
+
+# an agent takes a lease on the warm profile
+POST /profiles/client-b/acquire  ->  200
+     leaseId   a8cf3a6a-e047-4b36-b70c-da727d02bc82
+     cdpUrl    ws://127.0.0.1:51445/devtools/browser/d3255b7f…
+
+# it attaches over CDP and works in the already-open session
+connected. active page: https://example.com/
+
+# a second agent asks for the same profile
+POST /profiles/client-b/acquire  ->  409  profile "client-b" is leased until 2026-08-20T17:37:58.370Z
+
+# agent-1 hands it back; agent-2 gets the same warm session
+localStorage.who  agent-1
+cookie auth       tok-xyz   <- login state carried across the handover
+
+GET  /profiles/client-b/health   ->  authenticated
+warm for 0.3s, leased by agent-2
