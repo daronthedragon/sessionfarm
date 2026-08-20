@@ -1,3 +1,4 @@
+import http from 'node:http';
 import { chromium } from 'playwright-core';
 import { createServer } from '../dist/server.js';
 import * as pool from '../dist/pool.js';
@@ -64,6 +65,23 @@ ok('health check authenticates', h.state === 'authenticated', `(state=${h.state}
 // 9. status
 const st = await (await api('GET', '/profiles/e2e')).json();
 ok('status reports warm + lease', st.running === true && st.lease?.holder === 'agent-2', `(running=${st.running} holder=${st.lease?.holder})`);
+
+
+// 9b. failSelector on its own is a complete test: absent means the session held.
+const authSrv = http.createServer((q, r) => {
+  r.writeHead(200, { 'content-type': 'text/html' });
+  r.end(q.url === '/in' ? '<body><h1>account</h1></body>' : '<body><form><input id="login_field"></form></body>');
+});
+await new Promise(r => authSrv.listen(8802, '127.0.0.1', r));
+
+await api('POST', '/profiles', { name: 'fs-in',  authCheck: { url: 'http://127.0.0.1:8802/in',  failSelector: '#login_field' } });
+await api('POST', '/profiles', { name: 'fs-out', authCheck: { url: 'http://127.0.0.1:8802/out', failSelector: '#login_field' } });
+const hIn  = await (await api('GET', '/profiles/fs-in/health')).json();
+const hOut = await (await api('GET', '/profiles/fs-out/health')).json();
+ok('failSelector absent -> authenticated', hIn.state === 'authenticated', `(state=${hIn.state})`);
+ok('failSelector present -> expired',      hOut.state === 'expired',      `(state=${hOut.state})`);
+await api('DELETE', '/profiles/fs-in'); await api('DELETE', '/profiles/fs-out');
+authSrv.close();
 
 // 10. cleanup
 const del = await api('DELETE', '/profiles/e2e');

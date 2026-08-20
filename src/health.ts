@@ -48,7 +48,11 @@ export async function check(name: string): Promise<HealthResult> {
       pool.setHealth(name, r);
       return r;
     }
-    const r: HealthResult = { state: 'unknown', checkedAt, detail: 'authCheck has no okSelector, okText or failSelector' };
+    // A failSelector on its own is a complete test: the login form is absent on
+    // a page that requires auth, so the session held.
+    const r: HealthResult = failSelector
+      ? { state: 'authenticated', checkedAt, detail: `failSelector absent: ${failSelector}` }
+      : { state: 'unknown', checkedAt, detail: 'authCheck has no okSelector, okText or failSelector' };
     pool.setHealth(name, r);
     return r;
   } catch (err) {
